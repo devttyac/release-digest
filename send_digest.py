@@ -192,14 +192,21 @@ def main() -> int:
         print(f"  image skipped — {err}", file=sys.stderr)
 
     if args.archive_dir:
-        archive = Path(args.archive_dir)
-        archive.mkdir(parents=True, exist_ok=True)
-        # Archive the remote-URL version, not the cid: one — cid references only
-        # resolve inside the email that carries the attachments, so an archived
-        # copy using them would render with broken images.
-        (archive / f"release-digest-{data['month']}.html").write_text(render_digest.render(data))
-        (archive / f"release-digest-{data['month']}.json").write_text(json.dumps(data, indent=2))
-        print(f"Archived to {archive}", file=sys.stderr)
+        # Archiving is secondary — the email is the product. A read-only or
+        # wrongly-owned archive mount must not stop the digest going out, so
+        # this warns and carries on instead of aborting the run.
+        try:
+            archive = Path(args.archive_dir)
+            archive.mkdir(parents=True, exist_ok=True)
+            # Archive the remote-URL version, not the cid: one — cid references
+            # only resolve inside the email that carries the attachments, so an
+            # archived copy using them would render with broken images.
+            (archive / f"release-digest-{data['month']}.html").write_text(render_digest.render(data))
+            (archive / f"release-digest-{data['month']}.json").write_text(json.dumps(data, indent=2))
+            print(f"Archived to {archive}", file=sys.stderr)
+        except OSError as exc:
+            print(f"WARNING: could not archive to {args.archive_dir}: {exc} — sending anyway",
+                  file=sys.stderr)
 
     msg = EmailMessage()
     msg["Subject"] = f"Release Digest — {month_label}{args.subject_suffix}"

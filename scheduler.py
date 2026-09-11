@@ -64,8 +64,30 @@ def write_state(month: str) -> None:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         STATE_FILE.write_text(month + "\n")
     except OSError as exc:
-        # Not fatal, but it means a restart could re-send — say so loudly.
-        log(f"WARNING: cannot persist state to {STATE_FILE}: {exc} — a restart may resend")
+        log(f"ERROR: cannot persist state to {STATE_FILE}: {exc}")
+
+
+def ensure_state_writable() -> bool:
+    """Refuse to run if state can't be persisted.
+
+    Every safety property here depends on durable state: "don't send on first
+    boot" and "don't resend after a restart" are both decided by reading it
+    back. If the write silently fails, the scheduler believes nothing has been
+    sent and mails on every restart. Crash-looping with a clear message is far
+    better than quietly spamming the recipient.
+    """
+    try:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        probe = STATE_FILE.parent / ".write-probe"
+        probe.write_text("ok")
+        probe.unlink()
+        return True
+    except OSError as exc:
+        log(f"FATAL: state directory {STATE_FILE.parent} is not writable: {exc}")
+        log("Refusing to start: without durable state this would resend on every restart.")
+        log("The mounted directory must be writable by the container user (uid 10001), e.g.:")
+        log(f"    sudo chown -R 10001:10001 <host dir mounted at {STATE_FILE.parent}>")
+        return False
 
 
 def run_target(now: dt.datetime) -> dt.datetime:
@@ -95,6 +117,9 @@ def main() -> int:
         f"scheduler up — day={RUN_DAY} time={RUN_HOUR:02d}:{RUN_MINUTE:02d} "
         f"tz={os.environ.get('TZ', 'system')} state={STATE_FILE}"
     )
+
+    if not ensure_state_writable():
+        return 1
 
     if read_state() is None and not RUN_ON_START:
         seeded = dt.datetime.now().strftime("%Y-%m")
