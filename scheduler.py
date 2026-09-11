@@ -29,6 +29,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlencode, urlsplit, urlunsplit
+
+import requests
 
 RUN_DAY = int(os.environ.get("RUN_DAY", "1"))
 RUN_HOUR = int(os.environ.get("RUN_HOUR", "8"))
@@ -44,9 +47,40 @@ ENTRYPOINT = os.environ.get("ENTRYPOINT_PATH") or str(Path(__file__).resolve().p
 # suspended host, a clock jump or a DST shift can't overshoot the window.
 MAX_SLEEP = 3600
 
+# Optional Uptime Kuma push monitor. Without it a failed run is only visible in
+# the container log, which nobody reads until they notice the email is missing.
+PUSH_URL = os.environ.get("UPTIME_KUMA_PUSH_URL", "").strip()
+
+# Sticky failure flag. Idle pings report the last known send outcome rather than
+# an unconditional "up" — otherwise the hourly heartbeat would clear a genuine
+# failure alert an hour after it fired, and the monitor would flap.
+_last_send_failed = False
+_last_failure_msg = ""
+
 
 def log(msg: str) -> None:
     print(f"[{dt.datetime.now().isoformat(timespec='seconds')}] {msg}", flush=True)
+
+
+def push(status: str, msg: str) -> None:
+    """Ping the push monitor. Never raises, never blocks the digest."""
+    if not PUSH_URL:
+        return
+    parts = urlsplit(PUSH_URL)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        log("WARNING: UPTIME_KUMA_PUSH_URL is not a valid http(s) URL — skipping monitor ping")
+        return
+    # Rebuild the query rather than appending: Uptime Kuma shows the push URL
+    # with example params attached, and people paste it whole.
+    url = urlunsplit((
+        parts.scheme, parts.netloc, parts.path,
+        urlencode({"status": status, "msg": msg[:180]}), "",
+    ))
+    try:
+        requests.get(url, timeout=10)
+    except requests.RequestException as exc:
+        # Monitoring being down must never take the job down with it.
+        log(f"WARNING: monitor ping failed: {exc}")
 
 
 def read_state() -> str | None:
@@ -97,6 +131,7 @@ def run_target(now: dt.datetime) -> dt.datetime:
 
 
 def send_digest() -> bool:
+    global _last_send_failed, _last_failure_msg
     log("running digest")
     try:
         result = subprocess.run([ENTRYPOINT, "once"], check=False)
@@ -104,11 +139,18 @@ def send_digest() -> bool:
         # A missing or non-executable entrypoint must not take the scheduler
         # down with it — the stack would stop instead of retrying next check.
         log(f"digest FAILED to launch {ENTRYPOINT}: {exc}")
+        _last_send_failed, _last_failure_msg = True, f"cannot launch digest: {exc}"
+        push("down", _last_failure_msg)
         return False
     if result.returncode == 0:
         log("digest sent")
+        _last_send_failed, _last_failure_msg = False, ""
+        push("up", f"digest sent for {dt.datetime.now():%Y-%m}")
         return True
     log(f"digest FAILED (exit {result.returncode}) — will retry at the next check")
+    _last_send_failed = True
+    _last_failure_msg = f"digest exited {result.returncode} — see container log"
+    push("down", _last_failure_msg)
     return False
 
 
@@ -119,7 +161,11 @@ def main() -> int:
     )
 
     if not ensure_state_writable():
+        push("down", "refusing to start: state directory is not writable")
         return 1
+
+    if PUSH_URL:
+        log("monitor ping enabled")
 
     if read_state() is None and not RUN_ON_START:
         seeded = dt.datetime.now().strftime("%Y-%m")
@@ -150,6 +196,15 @@ def main() -> int:
             nxt = (target.replace(day=1) + dt.timedelta(days=32)).replace(day=1)
             day = min(RUN_DAY, calendar.monthrange(nxt.year, nxt.month)[1])
             target = nxt.replace(day=day, hour=RUN_HOUR, minute=RUN_MINUTE, second=0, microsecond=0)
+
+        # Idle heartbeat. Reports the last known send outcome, not an
+        # unconditional "up" — a failed run must stay flagged until a later run
+        # actually succeeds, otherwise the next heartbeat silently clears the
+        # alert and the monitor flaps green while the digest is still broken.
+        if _last_send_failed:
+            push("down", _last_failure_msg)
+        else:
+            push("up", f"idle — next run {target:%Y-%m-%d %H:%M}")
 
         sleep_for = max(1, min(MAX_SLEEP, (target - now).total_seconds()))
         time.sleep(sleep_for)

@@ -163,6 +163,7 @@ Note the trailing `once`. Without it you get the scheduler, which never exits.
 | `RUN_ON_START` | Send once at startup, for testing |
 | `STATE_FILE` | Where the last-sent month is recorded (default `/state/last-run`) |
 | `TZ` | Container timezone; the scheduler fires on local wall-clock time |
+| `UPTIME_KUMA_PUSH_URL` | Push-monitor URL; pinged `up` on a successful send, `down` on failure |
 
 ## Notes
 
@@ -171,5 +172,19 @@ Note the trailing `once`. Without it you get the scheduler, which never exits.
 - Archived HTML uses remote image URLs rather than the email's inline `cid:` references, so
   it renders correctly in a browser.
 - A failed archive write warns and still sends — the email is the product, the archive is not.
-- Failure is only visible in the container log. If that matters, point a push-style monitor
-  at a successful run.
+### Alerting on a failed run
+
+A Docker-container monitor only tells you the container is *running*. After a failed send
+the scheduler logs the error and keeps running, so the container stays green while the
+digest is broken. To catch that, create an Uptime Kuma **Push** monitor and set
+`UPTIME_KUMA_PUSH_URL` in `.env`.
+
+The scheduler then pings:
+
+- `up` after a successful send
+- `down` immediately when a run fails, with the reason
+- an hourly heartbeat carrying the **last known** outcome — a failure stays `down` until a
+  later run succeeds, so the heartbeat can't silently clear a real alert
+
+Set the monitor's heartbeat interval to something above an hour (7200s is comfortable) so
+a missing heartbeat also catches a container that died or wedged.
