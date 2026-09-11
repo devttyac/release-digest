@@ -5,6 +5,10 @@ A monthly email digest of upcoming **games, movies, and TV** — sourced from
 API's own popularity signal, with posters embedded so they display without a
 "load remote images" prompt.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="The digest email: a Games section of two-column cards, each with a poster thumbnail, release date, platforms and a short synopsis, with the highest-popularity title badged Top Pick" width="680">
+</p>
+
 No inbound port, no database. The container runs in either of two modes:
 
 | Mode | Behaviour | Suits |
