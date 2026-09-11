@@ -163,6 +163,7 @@ Note the trailing `once`. Without it you get the scheduler, which never exits.
 | `RUN_ON_START` | Send once at startup, for testing |
 | `STATE_FILE` | Where the last-sent month is recorded (default `/state/last-run`) |
 | `TZ` | Container timezone; the scheduler fires on local wall-clock time |
+| `DIGEST_RECIPIENT` | One address, or several comma-separated |
 | `UPTIME_KUMA_PUSH_URL` | Push-monitor URL; pinged `up` on a successful send, `down` on failure |
 
 ## Notes

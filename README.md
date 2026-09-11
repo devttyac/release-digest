@@ -60,6 +60,10 @@ All configuration lives in `.env` (see [.env.example](.env.example)): a TMDB key
 key, a Gmail address, a Gmail **App Password**, and a recipient. Nothing is read from
 command-line arguments, so credentials never land in shell history.
 
+`DIGEST_RECIPIENT` takes one address or a comma-separated list. An entry that can't be
+parsed is reported and skipped rather than silently dropped, so one typo can't quietly
+stop a recipient receiving the digest.
+
 The TMDB value must be the **API Key (v3 auth)** — 32 hex characters — not the longer
 "API Read Access Token" shown beneath it, which is for a different auth scheme and fails
 with `Invalid API key`.

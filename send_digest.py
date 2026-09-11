@@ -29,7 +29,7 @@ import os
 import smtplib
 import sys
 from email.message import EmailMessage
-from email.utils import make_msgid
+from email.utils import getaddresses, make_msgid
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -136,6 +136,24 @@ def download_images(urls: list[str]) -> tuple[dict[str, str], dict[str, tuple[by
     return cid_map, payloads, errors
 
 
+def parse_recipients(raw: str) -> tuple[list[str], list[str]]:
+    """Split a recipient string into (valid addresses, unparseable entries).
+
+    DIGEST_RECIPIENT accepts a comma-separated list. smtplib would happily drop
+    a malformed entry and deliver to the rest without comment, so a single typo
+    would quietly stop one person receiving the digest — surface it instead.
+    """
+    entries = [e.strip() for e in (raw or "").split(",") if e.strip()]
+    valid, bad = [], []
+    for entry, (_, addr) in zip(entries, getaddresses(entries)):
+        # Deliberately shallow: catch obvious typos, don't reimplement RFC 5322.
+        if addr and "@" in addr and "." in addr.split("@")[-1] and " " not in addr:
+            valid.append(addr)
+        else:
+            bad.append(entry)
+    return valid, bad
+
+
 def plain_text(data: dict, month_label: str) -> str:
     lines = [f"Release Digest — {month_label}", ""]
     for key, label in (("games", "GAMES"), ("movies", "MOVIES"), ("tv", "TV")):
@@ -182,6 +200,13 @@ def main() -> int:
         print(f"Missing/unset: {', '.join(missing)} — edit .env in {SCRIPT_DIR}", file=sys.stderr)
         return 2
 
+    recipients, bad_recipients = parse_recipients(recipient)
+    for entry in bad_recipients:
+        print(f"WARNING: ignoring unparseable recipient {entry!r}", file=sys.stderr)
+    if not recipients and not args.dry_run:
+        print(f"No usable address in DIGEST_RECIPIENT={recipient!r}", file=sys.stderr)
+        return 2
+
     data = json.loads(Path(args.json_path).read_text())
     year, month = data["month"].split("-")
     month_label = f"{render_digest.MONTHS[int(month) - 1]} {year}"
@@ -211,7 +236,9 @@ def main() -> int:
     msg = EmailMessage()
     msg["Subject"] = f"Release Digest — {month_label}{args.subject_suffix}"
     msg["From"] = sender or "unset@example.com"
-    msg["To"] = recipient or "unset@example.com"
+    # Join the parsed addresses rather than passing the raw string through:
+    # anything unparseable has already been reported and dropped above.
+    msg["To"] = ", ".join(recipients) or "unset@example.com"
     msg.set_content(plain_text(data, month_label))
     msg.add_alternative(render_digest.render(data, cid_map), subtype="html")
 
@@ -221,7 +248,8 @@ def main() -> int:
         html_part.add_related(blob, maintype="image", subtype=subtype, cid=f"<{cid}>")
 
     if args.dry_run:
-        print(f"DRY RUN — would send to {recipient}, {len(msg.as_bytes())} bytes total", file=sys.stderr)
+        print(f"DRY RUN — would send to {len(recipients)} recipient(s): {', '.join(recipients)}, "
+              f"{len(msg.as_bytes())} bytes total", file=sys.stderr)
         return 0
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
@@ -229,7 +257,8 @@ def main() -> int:
         smtp.login(sender, app_password)
         smtp.send_message(msg)
 
-    print(f"Sent to {recipient} — {len(msg.as_bytes())} bytes", file=sys.stderr)
+    print(f"Sent to {len(recipients)} recipient(s): {', '.join(recipients)} — "
+          f"{len(msg.as_bytes())} bytes", file=sys.stderr)
     return 0
 
 
