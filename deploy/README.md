@@ -172,7 +172,10 @@ Note the trailing `once`. Without it you get the scheduler, which never exits.
 - Archived HTML uses remote image URLs rather than the email's inline `cid:` references, so
   it renders correctly in a browser.
 - A failed archive write warns and still sends — the email is the product, the archive is not.
-### Alerting on a failed run
+
+---
+
+## Alerting on a failed run
 
 A Docker-container monitor only tells you the container is *running*. After a failed send
 the scheduler logs the error and keeps running, so the container stays green while the
