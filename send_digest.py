@@ -84,7 +84,7 @@ def sniff_image_subtype(blob: bytes) -> str | None:
 
 def collect_image_urls(data: dict) -> list[str]:
     seen: list[str] = []
-    for category in ("games", "movies", "tv"):
+    for _, category in render_digest.CATEGORIES:
         for item in data.get(category, []):
             url = item.get("image")
             if url and url not in seen:
@@ -156,11 +156,11 @@ def parse_recipients(raw: str) -> tuple[list[str], list[str]]:
 
 def plain_text(data: dict, month_label: str) -> str:
     lines = [f"Release Digest — {month_label}", ""]
-    for key, label in (("games", "GAMES"), ("movies", "MOVIES"), ("tv", "TV")):
+    for label, key in render_digest.CATEGORIES:
         items = data.get(key, [])
         if not items:
             continue
-        lines.append(label)
+        lines.append(label.upper())
         for item in items:
             mark = " [TOP PICK]" if item.get("top_pick") else ""
             lines.append(f"  {render_digest.fmt_date(item['release_date'])} — {item['title']}{mark}")

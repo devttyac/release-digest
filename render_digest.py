@@ -45,6 +45,11 @@ FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-
 MONTHS = ["January", "February", "March", "April", "May", "June", "July",
           "August", "September", "October", "November", "December"]
 
+# Single source of truth for the sections, in display order. Anything that
+# walks the categories imports this — adding a section in one place and
+# forgetting another is exactly how anime posters nearly shipped unembedded.
+CATEGORIES = (("Games", "games"), ("Movies", "movies"), ("TV", "tv"), ("Anime", "anime"))
+
 
 def esc(s: str) -> str:
     return html.escape(s or "", quote=True)
@@ -90,6 +95,9 @@ def card_html(item: dict, category: str, cid_map: dict[str, str] | None = None) 
         meta_extra = " · " + esc(", ".join(item["platforms"][:3]))
     elif category == "movies":
         meta_extra = " · Theatrical"
+    elif category == "anime" and item.get("format"):
+        # The anime section mixes films and series, so say which.
+        meta_extra = " · " + esc(item["format"])
 
     pill = (
         f'<span style="display:inline-block;background:{ACCENT};color:#ffffff;font-size:10px;'
@@ -212,11 +220,13 @@ def render(data: dict, cid_map: dict[str, str] | None = None) -> str:
             f'font-family:{FONT};">Note: {esc("; ".join(data["errors"]))}</div></td></tr>'
         )
 
-    body = "".join([
-        section_html("Games", data.get("games", []), "games", cid_map),
-        section_html("Movies", data.get("movies", []), "movies", cid_map),
-        section_html("TV", data.get("tv", []), "tv", cid_map),
-    ])
+    # Skip a section with nothing in it rather than printing "No releases found"
+    # — some months genuinely have no anime, and an empty block reads as a bug.
+    body = "".join(
+        section_html(label, data[key], key, cid_map)
+        for label, key in CATEGORIES
+        if data.get(key)
+    )
 
     return f"""<!DOCTYPE html>
 <html>

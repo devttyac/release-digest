@@ -85,16 +85,64 @@ def target_month(arg: str | None) -> tuple[str, str]:
     return first_day.isoformat(), last_day.isoformat()
 
 
-def fetch_tmdb(kind: str, api_key: str, first_day: str, last_day: str) -> tuple[list[dict], str | None]:
-    """Fetch TMDB /discover/movie or /discover/tv. Returns (items, error)."""
+ANIMATION_GENRE = 16
+
+
+def hentai_keyword_id(api_key: str) -> int | None:
+    """Resolve TMDB's 'hentai' keyword id, for excluding explicit titles.
+
+    Looked up rather than hardcoded so it can't silently rot if the id changes.
+    Only 'hentai' is blocked — deliberately not 'ecchi', which denotes
+    fanservice rather than explicit content and is applied to many mainstream
+    titles; blocking it would remove legitimate releases invisibly.
+
+    include_adult=false already runs on every query, but TMDB only sets that
+    flag on outright pornographic entries, so it misses most hentai series.
+    """
+    try:
+        resp = requests.get(
+            "https://api.themoviedb.org/3/search/keyword",
+            params={"api_key": api_key, "query": "hentai"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        data = resp.json()
+    except (requests.RequestException, ValueError):
+        return None
+    if not resp.ok:
+        return None
+    for k in data.get("results", []):
+        if k.get("name", "").lower() == "hentai":
+            return k.get("id")
+    return None
+
+
+def fetch_tmdb(kind: str, api_key: str, first_day: str, last_day: str,
+               anime: bool = False, exclude_keyword: int | None = None) -> tuple[list[dict], str | None]:
+    """Fetch TMDB /discover/movie or /discover/tv. Returns (items, error).
+
+    With anime=True, restricts to Japanese-language animation. The two filters
+    are ANDed by TMDB, so live-action Japanese titles cannot match — only
+    genre 16 does. That heuristic trades false negatives for precision: it
+    misses anime that isn't Japanese-language (co-productions, English-original
+    anime-style shows) rather than polluting the section with everything
+    animated.
+    """
     date_field = "primary_release_date" if kind == "movie" else "first_air_date"
     params = {
         "api_key": api_key,
         "sort_by": "popularity.desc",
+        "include_adult": "false",
         f"{date_field}.gte": first_day,
         f"{date_field}.lte": last_day,
     }
-    if kind == "movie":
+    if anime:
+        params["with_genres"] = ANIMATION_GENRE
+        params["with_original_language"] = "ja"
+    if exclude_keyword:
+        params["without_keywords"] = exclude_keyword
+    if kind == "movie" and not anime:
+        # Anime films rarely get a wide US theatrical run, so applying the
+        # region/release-type filter to them would exclude nearly all of them.
         params["region"] = "US"
         params["with_release_type"] = "2|3"  # theatrical (limited + wide)
 
@@ -135,6 +183,8 @@ def fetch_tmdb(kind: str, api_key: str, first_day: str, last_day: str) -> tuple[
             "url": f"https://www.themoviedb.org/{kind}/{tmdb_id}" if tmdb_id else None,
             "tmdb_id": tmdb_id,
             "kind": kind,
+            # The anime section merges films and series, so each card says which.
+            "format": "Film" if kind == "movie" else "Series",
             "original_language": r.get("original_language"),
             "overview": trim_overview(r.get("overview")),
             # w185 — posters display at 64x96, so this is already 2x for retina.
@@ -367,15 +417,27 @@ def main() -> int:
         return 2
 
     errors = []
-    movies, err = fetch_tmdb("movie", tmdb_key, first_day, last_day)
+    block = hentai_keyword_id(tmdb_key)
+    if block is None:
+        errors.append("TMDB hentai keyword lookup failed — explicit titles filtered by include_adult only")
+
+    movies, err = fetch_tmdb("movie", tmdb_key, first_day, last_day, exclude_keyword=block)
     if err:
         errors.append(err)
-    tv, err = fetch_tmdb("tv", tmdb_key, first_day, last_day)
+    tv, err = fetch_tmdb("tv", tmdb_key, first_day, last_day, exclude_keyword=block)
     if err:
         errors.append(err)
     games, err = fetch_rawg(rawg_key, first_day, last_day)
     if err:
         errors.append(err)
+
+    # Anime spans both endpoints, so it needs two queries merged into one list.
+    anime = []
+    for kind in ("movie", "tv"):
+        got, err = fetch_tmdb(kind, tmdb_key, first_day, last_day, anime=True, exclude_keyword=block)
+        if err:
+            errors.append(f"anime/{kind}: {err}")
+        anime.extend(got)
 
     if not movies and not tv and not games:
         print("All three sources returned nothing or errored:", file=sys.stderr)
@@ -391,10 +453,15 @@ def main() -> int:
     games_final = clean(games)
     enrich_game_descriptions(games_final, rawg_key)
 
-    movies_final = clean(movies)
-    tv_final = clean(tv)
-    enrich_tmdb_overviews(movies_final, tmdb_key)
-    enrich_tmdb_overviews(tv_final, tmdb_key)
+    # Anime gets its own section, so remove those titles from Movies and TV —
+    # otherwise a popular anime film would occupy a slot in both places.
+    anime_final = clean(anime)
+    anime_ids = {i["tmdb_id"] for i in anime_final if i.get("tmdb_id")}
+    movies_final = clean([m for m in movies if m.get("tmdb_id") not in anime_ids])
+    tv_final = clean([t for t in tv if t.get("tmdb_id") not in anime_ids])
+
+    for group in (movies_final, tv_final, anime_final):
+        enrich_tmdb_overviews(group, tmdb_key)
 
     output = {
         # Always the canonical YYYY-MM. Taking args.month verbatim would let
@@ -405,12 +472,14 @@ def main() -> int:
         "games": games_final,
         "movies": movies_final,
         "tv": tv_final,
+        "anime": anime_final,
         "errors": errors,
     }
 
     out_path = Path(args.out)
     out_path.write_text(json.dumps(output, indent=2))
-    print(f"Wrote {out_path} — games={len(output['games'])} movies={len(output['movies'])} tv={len(output['tv'])}", file=sys.stderr)
+    print(f"Wrote {out_path} — games={len(output['games'])} movies={len(output['movies'])} "
+          f"tv={len(output['tv'])} anime={len(output['anime'])}", file=sys.stderr)
     if errors:
         print("Partial failures:", file=sys.stderr)
         for e in errors:
