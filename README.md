@@ -19,8 +19,8 @@ No inbound port, no database. The container runs in either of two modes:
 ## What it does
 
 1. **Fetch** — pulls the target month's releases from RAWG (games) and TMDB (movies + TV).
-2. **Rank** — sorts each category latest-first by release date, and flags the single
-   highest-popularity title per category as **Top Pick**.
+2. **Rank** — sorts each category latest-first by release date, badges each card with its
+   popularity rank within that category, and flags the top one as **Top Pick**.
 3. **Render** — builds an email-safe HTML digest.
 4. **Send** — emails it over Gmail SMTP with every poster embedded as an inline attachment.
 
@@ -111,6 +111,11 @@ and are worth knowing before "simplifying" them:
   entry from turning the sender into an SSRF vector.
 - **Image type is sniffed from magic bytes**, not the `Content-Type` header, because TMDB
   sometimes omits the header and valid posters would otherwise be dropped.
+- **Popularity shows as a rank, not a raw score.** RAWG's `added` is a count of users who
+  added the game; TMDB's `popularity` is an opaque float that changes daily. Printing both
+  would invite a comparison that means nothing — a game at 4,981 against a film at 230 is
+  not 20x more popular. A per-category rank is comparable and answers the question a
+  reader actually has, given the cards are ordered by date rather than by popularity.
 
 ## Layout
 

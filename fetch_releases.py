@@ -334,6 +334,14 @@ def rank(items: list[dict], cap: int = 10) -> list[dict]:
         capped.sort(key=lambda i: i["release_date"], reverse=True)
     for item in capped:
         item["top_pick"] = item is top
+
+    # Rank within the category, most popular first. The cards are ordered by
+    # date, so this is what lets a reader spot the notable ones at a glance.
+    # Deliberately a rank and not the raw score: RAWG's `added` is a user count
+    # while TMDB's `popularity` is an opaque daily-changing float, so the two
+    # are meaningless to compare directly.
+    for position, item in enumerate(sorted(capped, key=lambda i: i["popularity"], reverse=True), start=1):
+        item["popularity_rank"] = position
     return capped
 
 

@@ -114,10 +114,22 @@ def card_html(item: dict, category: str, cid_map: dict[str, str] | None = None) 
         if url else title
     )
 
+    # Popularity as a within-category rank, not a raw figure: RAWG's `added` is
+    # a user count and TMDB's `popularity` an opaque float, so the underlying
+    # numbers aren't comparable between sections. Cards are ordered by date, so
+    # the rank is what surfaces the notable ones.
+    rank_badge = ""
+    if item.get("popularity_rank"):
+        rank_badge = (
+            f'<span style="display:inline-block;background:#ece8fa;color:{INK_DIM};'
+            f'font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;'
+            f'font-family:{FONT};margin-right:6px;">#{item["popularity_rank"]}</span>'
+        )
+
     text_cell = f"""<td valign="top" style="padding:0;">
       {pill}<div style="font-weight:600;font-size:15px;line-height:1.25;color:{INK};font-family:{FONT};">{linked_title}</div>
-      <div style="font-size:12px;color:{INK_FAINT};font-family:{FONT};margin-top:3px;">
-        <span style="color:{ACCENT};font-weight:600;">{date}</span>{meta_extra}
+      <div style="font-size:12px;color:{INK_FAINT};font-family:{FONT};margin-top:4px;">
+        {rank_badge}<span style="color:{ACCENT};font-weight:600;">{date}</span>{meta_extra}
       </div>
       {blurb}
     </td>"""
