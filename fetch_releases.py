@@ -13,6 +13,7 @@ CLI arguments, and never print their values.
 
 import argparse
 import calendar
+import html
 import re
 import datetime
 import json
@@ -28,10 +29,18 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def clean_description(text: str) -> str:
-    """Strip leftover markdown/formatting artifacts RAWG's description_raw sometimes
-    carries from store pages (heading markers, blockquote markers, stray '<'/'>'),
-    and collapse newlines/whitespace to single spaces."""
-    text = (text or "").replace("<", " ").replace(">", " ")
+    """Normalise a description from either source into plain prose.
+
+    Handles HTML (RAWG's `description` field is HTML), leftover markdown
+    artifacts that store-page copy carries into `description_raw`, HTML
+    entities, and newline/whitespace noise.
+    """
+    text = text or ""
+    # Turn block boundaries into spaces before dropping tags, so words either
+    # side of a <br> or </p> don't get glued together.
+    text = re.sub(r"<\s*br\s*/?\s*>|</\s*(p|div|li)\s*>", " ", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text)
     text = re.sub(r"[#*_`]+", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     return re.sub(r"^[.\-\s]+", "", text)
@@ -105,10 +114,16 @@ def fetch_tmdb(kind: str, api_key: str, first_day: str, last_day: str) -> tuple[
         if not title or not release_date:
             continue
         poster_path = r.get("poster_path")
+        tmdb_id = r.get("id")
         items.append({
             "title": title,
             "release_date": release_date,
             "popularity": r.get("popularity", 0),
+            # Links straight to the title's page on the source site.
+            "url": f"https://www.themoviedb.org/{kind}/{tmdb_id}" if tmdb_id else None,
+            "tmdb_id": tmdb_id,
+            "kind": kind,
+            "original_language": r.get("original_language"),
             "overview": trim_overview(r.get("overview")),
             # w185 — posters display at 64x96, so this is already 2x for retina.
             # Larger sizes bloat the email badly once images are embedded inline.
@@ -163,16 +178,69 @@ def fetch_rawg(api_key: str, first_day: str, last_day: str) -> tuple[list[dict],
         if not name or not released:
             continue
         platforms = [p["platform"]["name"] for p in (r.get("platforms") or []) if p.get("platform", {}).get("name")]
+        slug = r.get("slug")
         items.append({
             "id": r.get("id"),
             "title": name,
             "release_date": released,
             "popularity": r.get("added", 0),
+            "url": f"https://rawg.io/games/{slug}" if slug else None,
             "image": rawg_thumb(r.get("background_image")),
             "platforms": platforms,
             "overview": "",  # RAWG's list endpoint has no description; filled in by enrich_game_descriptions
         })
     return items, None
+
+
+def enrich_tmdb_overviews(items: list[dict], api_key: str) -> None:
+    """Fill in `overview` for TMDB items whose English synopsis is empty.
+
+    TMDB's discover response returns the English overview, which is routinely
+    blank for foreign-language titles even though the site shows a synopsis —
+    the text exists only as a translation. Falls back to the title's original
+    language, then to whatever translation has one. Showing a French synopsis
+    beats showing an empty card.
+
+    Only called for the final, already-capped list, so this costs one request
+    per genuinely-missing description rather than one per candidate.
+    """
+    for item in items:
+        if item.get("overview") or not item.get("tmdb_id"):
+            continue
+        # Coerce rather than interpolate raw API values into a URL path — ids
+        # are integers, and anything else has no business shaping the request.
+        try:
+            tmdb_id = int(item["tmdb_id"])
+        except (TypeError, ValueError):
+            continue
+        kind = "tv" if item.get("kind") == "tv" else "movie"
+        try:
+            resp = requests.get(
+                f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/translations",
+                params={"api_key": api_key},
+                timeout=REQUEST_TIMEOUT,
+            )
+            data = resp.json()
+        except (requests.RequestException, ValueError):
+            continue  # an enhancement, not core data — skip quietly
+        if not resp.ok:
+            continue
+
+        # `or ""` rather than a default arg: the key is often present with a
+        # null value, and .strip() on None would raise.
+        by_lang = {
+            t.get("iso_639_1"): ((t.get("data") or {}).get("overview") or "").strip()
+            for t in data.get("translations", [])
+        }
+        by_lang = {k: v for k, v in by_lang.items() if v}
+        if not by_lang:
+            continue
+
+        original = item.get("original_language")
+        for lang in ("en", original, *by_lang.keys()):
+            if lang and by_lang.get(lang):
+                item["overview"] = trim_overview(by_lang[lang])
+                break
 
 
 def enrich_game_descriptions(games: list[dict], api_key: str) -> None:
@@ -186,8 +254,12 @@ def enrich_game_descriptions(games: list[dict], api_key: str) -> None:
         if not game.get("id"):
             continue
         try:
+            game_id = int(game["id"])
+        except (TypeError, ValueError):
+            continue
+        try:
             resp = requests.get(
-                f"https://api.rawg.io/api/games/{game['id']}",
+                f"https://api.rawg.io/api/games/{game_id}",
                 params={"key": api_key},
                 timeout=REQUEST_TIMEOUT,
             )
@@ -195,7 +267,10 @@ def enrich_game_descriptions(games: list[dict], api_key: str) -> None:
         except (requests.RequestException, ValueError):
             continue  # description is an enhancement, not core data — skip quietly on failure
         if resp.ok:
-            game["overview"] = trim_overview(data.get("description_raw"))
+            # description_raw is often empty even when the site shows an About
+            # section — the text is only in `description`, which is HTML.
+            # clean_description strips the markup.
+            game["overview"] = trim_overview(data.get("description_raw") or data.get("description"))
 
 
 def clip_to_range(items: list[dict], first_day: str, last_day: str) -> list[dict]:
@@ -287,16 +362,23 @@ def main() -> int:
     def clean(cat_items: list[dict]) -> list[dict]:
         return rank(dedupe(clip_to_range(cat_items, first_day, last_day)))
 
+    # Enrichment runs only on the final capped lists, so the extra requests are
+    # a handful rather than one per raw candidate.
     games_final = clean(games)
-    enrich_game_descriptions(games_final, rawg_key)  # extra requests, but only for the ~10 games we're actually showing
+    enrich_game_descriptions(games_final, rawg_key)
+
+    movies_final = clean(movies)
+    tv_final = clean(tv)
+    enrich_tmdb_overviews(movies_final, tmdb_key)
+    enrich_tmdb_overviews(tv_final, tmdb_key)
 
     output = {
         "month": (args.month or first_day[:7]),
         "first_day": first_day,
         "last_day": last_day,
         "games": games_final,
-        "movies": clean(movies),
-        "tv": clean(tv),
+        "movies": movies_final,
+        "tv": tv_final,
         "errors": errors,
     }
 

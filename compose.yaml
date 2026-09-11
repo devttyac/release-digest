@@ -1,0 +1,32 @@
+# Dockge stack. Paste into Dockge as a new stack named "release-digest",
+# fill the .env, then Start.
+#
+# Runs as a long-lived scheduler: it stays up and fires the digest once a month,
+# which is what a stack manager expects. It records the month it last sent, so a
+# restart won't resend, and a host that was down on the 1st still catches up.
+#
+# First boot does NOT send — it seeds its state and waits for next month. To
+# send one immediately as a test, set RUN_ON_START=1, start, watch the log,
+# then remove it and restart.
+services:
+  release-digest:
+    image: ghcr.io/devttyac/release-digest:latest
+    # To build from a local clone instead of pulling, comment out `image:` above
+    # and uncomment:
+    # build: .
+    container_name: release-digest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Singapore
+      RUN_DAY: "1"
+      RUN_HOUR: "8"
+      RUN_MINUTE: "0"
+      ARCHIVE_DIR: /archive
+      # RUN_ON_START: "1"      # send once on startup, for testing
+      # DIGEST_MONTH: "2026-11"  # target a specific month
+      # DRY_RUN: "1"             # build without sending
+    volumes:
+      - ./state:/state       # remembers the last month sent; keeps restarts from resending
+      - ./archive:/archive   # rendered HTML + raw JSON per run

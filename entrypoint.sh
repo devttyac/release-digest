@@ -1,7 +1,21 @@
 #!/bin/sh
-# Chain the two stages of a run. Kept as a script rather than folded into the
-# Python so each stage stays independently runnable during development.
+# Two modes:
+#   scheduler  (default) long-running; fires the digest monthly. Suits Dockge,
+#              compose stacks, anything that expects a service to stay up.
+#   once       run the digest now and exit. Suits a systemd timer, cron, or a
+#              manual `docker run`.
 set -eu
+
+MODE="${1:-scheduler}"
+
+if [ "$MODE" = "scheduler" ]; then
+    exec python /app/scheduler.py
+fi
+
+if [ "$MODE" != "once" ]; then
+    echo "unknown mode: '$MODE' (expected 'scheduler' or 'once')" >&2
+    exit 64
+fi
 
 DATA_FILE=/tmp/release-digest-data.json
 

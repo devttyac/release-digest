@@ -105,8 +105,17 @@ def card_html(item: dict, category: str, cid_map: dict[str, str] | None = None) 
             f'font-family:{FONT};margin-top:5px;">{esc(clamp(item["overview"]))}</div>'
         )
 
+    # Link through to the title's page on TMDB / RAWG. Colour and
+    # text-decoration are set explicitly because clients restyle bare links —
+    # left alone, these turn blue-and-underlined and the cards get noisy.
+    url = item.get("url")
+    linked_title = (
+        f'<a href="{esc(url)}" style="color:{INK};text-decoration:none;">{title}</a>'
+        if url else title
+    )
+
     text_cell = f"""<td valign="top" style="padding:0;">
-      {pill}<div style="font-weight:600;font-size:15px;line-height:1.25;color:{INK};font-family:{FONT};">{title}</div>
+      {pill}<div style="font-weight:600;font-size:15px;line-height:1.25;color:{INK};font-family:{FONT};">{linked_title}</div>
       <div style="font-size:12px;color:{INK_FAINT};font-family:{FONT};margin-top:3px;">
         <span style="color:{ACCENT};font-weight:600;">{date}</span>{meta_extra}
       </div>
@@ -120,26 +129,33 @@ def card_html(item: dict, category: str, cid_map: dict[str, str] | None = None) 
         # default, but never block parts carried inside the message itself.
         src = f"cid:{cid_map[image]}" if cid_map and image in cid_map else image
         w, h = thumb_size(category)
-        thumb_cell = (
-            f'<td valign="top" width="{w + 12}" style="padding:0 12px 0 0;">'
+        img = (
             f'<img src="{esc(src)}" alt="{title}" width="{w}" height="{h}" '
             f'style="width:{w}px;height:{h}px;object-fit:cover;display:block;border-radius:6px;'
             f'border:1px solid {BORDER};">'
-            f"</td>"
+        )
+        if url:
+            # border:0 matters — some clients draw a link border around a
+            # wrapped image otherwise.
+            img = f'<a href="{esc(url)}" style="text-decoration:none;border:0;">{img}</a>'
+        thumb_cell = (
+            f'<td valign="top" width="{w + 12}" style="padding:0 12px 0 0;">{img}</td>'
         )
     else:
         thumb_cell = ""
 
-    # height="100%" makes the card fill its table cell, so both cards in a row
-    # end up the same height instead of one floating short above a gap.
-    return f"""<table role="presentation" width="100%" height="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{bg}"
-  style="background:{bg};border:1px solid {border};border-radius:12px;height:100%;">
-  <tr><td valign="top" style="padding:14px;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-      <tr>{thumb_cell}{text_cell}</tr>
-    </table>
-  </td></tr>
-</table>"""
+    # The card IS the table cell — its background, border and radius live on the
+    # <td> itself rather than on a nested table. Cells in a table row are always
+    # equal height, so two cards side by side match automatically. The previous
+    # nested-table version only ever took its content height, which left a short
+    # card floating above a gap next to a tall one, and `height:100%` on a table
+    # inside an auto-height cell is not honoured consistently across clients.
+    return f"""<td width="50%" valign="top" bgcolor="{bg}"
+  style="background:{bg};border:1px solid {border};border-radius:12px;padding:14px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr>{thumb_cell}{text_cell}</tr>
+  </table>
+</td>"""
 
 
 def category_table(items: list[dict], category: str, cid_map: dict[str, str] | None = None) -> str:
@@ -148,17 +164,16 @@ def category_table(items: list[dict], category: str, cid_map: dict[str, str] | N
     rows = []
     for i in range(0, len(items), 2):
         pair = items[i:i + 2]
-        cells = "".join(
-            f'<td width="50%" valign="top" height="100%" style="padding:0 7px 12px 0;height:100%;">{card_html(it, category, cid_map)}</td>'
-            if idx == 0 else
-            f'<td width="50%" valign="top" height="100%" style="padding:0 0 12px 7px;height:100%;">{card_html(it, category, cid_map)}</td>'
-            for idx, it in enumerate(pair)
-        )
+        cells = "".join(card_html(it, category, cid_map) for it in pair)
         if len(pair) == 1:
-            cells += '<td width="50%"></td>'
+            # Keep the lone card at half width rather than letting it stretch.
+            cells += '<td width="50%" style="border:0;"></td>'
         rows.append(f"<tr>{cells}</tr>")
+    # cellspacing supplies the gutters between cards. Padding on the card cells
+    # can't do it — that sits inside the border, so the cards would touch.
     return (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="12" border="0" '
+        'style="border-collapse:separate;border-spacing:12px;">'
         + "".join(rows) + "</table>"
     )
 
