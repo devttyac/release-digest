@@ -1,0 +1,28 @@
+[Unit]
+Description=Release Digest — monthly games/movies/TV email
+Documentation=https://github.com/devttyac/release-digest
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+
+# Adjust this path to wherever you cloned the repo.
+WorkingDirectory=/home/YOUR_USER/docker/release-digest
+
+# --rm so each run leaves nothing behind. The .env is mounted at runtime rather
+# than baked into the image, so credentials never live in an image layer.
+ExecStart=/usr/bin/docker run --rm \
+    --name release-digest-run \
+    --env-file /home/YOUR_USER/docker/release-digest/.env \
+    -e TZ=Etc/UTC \
+    -e ARCHIVE_DIR=/archive \
+    -v /home/YOUR_USER/docker/release-digest/archive:/archive \
+    release-digest:latest
+
+# A stalled CDN shouldn't leave this hanging until next month's run.
+TimeoutStartSec=20min
+
+[Install]
+WantedBy=multi-user.target

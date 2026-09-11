@@ -1,0 +1,9 @@
+# Secrets must never enter an image layer — the .env is mounted at runtime instead.
+.env
+.env.*
+
+.venv/
+__pycache__/
+*.pyc
+deploy/
+README.md

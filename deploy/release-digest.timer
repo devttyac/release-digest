@@ -1,0 +1,19 @@
+[Unit]
+Description=Run the Release Digest on the 1st of each month
+Documentation=https://github.com/devttyac/release-digest
+
+[Timer]
+# 1st of every month, 08:00 local (TZ is set on the unit's container).
+OnCalendar=*-*-01 08:00:00
+
+# If the VPS was down at 08:00 on the 1st, run as soon as it is back rather
+# than silently skipping the month.
+Persistent=true
+
+# Avoid every timer on the box firing at the same instant.
+RandomizedDelaySec=5min
+
+Unit=release-digest.service
+
+[Install]
+WantedBy=timers.target

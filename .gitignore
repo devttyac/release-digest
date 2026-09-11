@@ -1,0 +1,10 @@
+# Secrets — .env.example is the tracked template
+.env
+.env.local
+
+.venv/
+__pycache__/
+*.pyc
+
+archive/
+cron.log
