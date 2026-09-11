@@ -1,6 +1,6 @@
 # release-digest
 
-A monthly email digest of upcoming **games, movies, and TV** — sourced from
+A monthly email digest of upcoming **games, movies, TV and anime** — sourced from
 [RAWG](https://rawg.io/apidocs) and [TMDB](https://www.themoviedb.org/), ranked by each
 API's own popularity signal, with posters embedded so they display without a
 "load remote images" prompt.
@@ -18,7 +18,8 @@ No inbound port, no database. The container runs in either of two modes:
 
 ## What it does
 
-1. **Fetch** — pulls the target month's releases from RAWG (games) and TMDB (movies + TV).
+1. **Fetch** — pulls the target month's releases from RAWG (games) and TMDB (movies, TV
+   and anime).
 2. **Rank** — sorts each category latest-first by release date, badges each card with its
    popularity rank within that category, and flags the top one as **Top Pick**.
 3. **Render** — builds an email-safe HTML digest.
@@ -111,6 +112,16 @@ and are worth knowing before "simplifying" them:
   entry from turning the sender into an SSRF vector.
 - **Image type is sniffed from magic bytes**, not the `Content-Type` header, because TMDB
   sometimes omits the header and valid posters would otherwise be dropped.
+- **Anime is matched by genre 16 + Japanese original language**, ANDed, so live-action
+  Japanese titles can't match. That trades false negatives for precision: anime that
+  isn't Japanese-language (co-productions, English-original anime-style shows) is missed
+  here, though it still reaches the digest via Movies or TV. Anime needs its own section
+  because it loses on TMDB's global popularity score against mainstream releases and
+  otherwise never surfaces at all.
+- **Explicit titles are excluded** via `include_adult=false` plus TMDB's `hentai` keyword,
+  looked up at runtime. `ecchi` is deliberately *not* blocked — it denotes fanservice
+  rather than explicit content and is applied to plenty of mainstream titles, so blocking
+  it would remove legitimate releases invisibly.
 - **Popularity shows as a rank, not a raw score.** RAWG's `added` is a count of users who
   added the game; TMDB's `popularity` is an opaque float that changes daily. Printing both
   would invite a comparison that means nothing — a game at 4,981 against a film at 230 is
