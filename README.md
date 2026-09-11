@@ -5,7 +5,12 @@ A monthly email digest of upcoming **games, movies, and TV** — sourced from
 API's own popularity signal, with posters embedded so they display without a
 "load remote images" prompt.
 
-Runs as a one-shot container. No server, no inbound port, no database.
+No inbound port, no database. The container runs in either of two modes:
+
+| Mode | Behaviour | Suits |
+|---|---|---|
+| `scheduler` *(default)* | Stays up, fires the digest once a month | Docker Compose, Dockge, Portainer — anything expecting a service to stay running |
+| `once` | Runs the digest immediately and exits | systemd timers, cron, manual runs |
 
 ## What it does
 
@@ -17,16 +22,25 @@ Runs as a one-shot container. No server, no inbound port, no database.
 
 ## Quick start
 
+A prebuilt image is published to `ghcr.io/devttyac/release-digest:latest`, so there's
+nothing to compile.
+
 ```bash
 git clone https://github.com/devttyac/release-digest.git
 cd release-digest
-cp .env.example .env && nano .env     # four values; see below
+cp .env.example .env && nano .env     # five values
 chmod 600 .env
-
-docker build -t release-digest:latest .
-docker run --rm --env-file .env -e DRY_RUN=1 release-digest:latest   # no mail sent
-docker run --rm --env-file .env release-digest:latest                # send it
 ```
+
+```bash
+# Single run. `once` matters — without it you get the scheduler, which idles.
+docker run --rm --env-file .env ghcr.io/devttyac/release-digest:latest once
+
+# Same, but builds the message without sending.
+docker run --rm --env-file .env -e DRY_RUN=1 ghcr.io/devttyac/release-digest:latest once
+```
+
+To run it on a schedule instead, see [deploy/README.md](deploy/README.md).
 
 Without Docker:
 
@@ -42,14 +56,31 @@ All configuration lives in `.env` (see [.env.example](.env.example)): a TMDB key
 key, a Gmail address, a Gmail **App Password**, and a recipient. Nothing is read from
 command-line arguments, so credentials never land in shell history.
 
-Runtime knobs (`DIGEST_MONTH`, `ARCHIVE_DIR`, `DRY_RUN`, `TZ`) are documented
-in [deploy/README.md](deploy/README.md).
+The TMDB value must be the **API Key (v3 auth)** — 32 hex characters — not the longer
+"API Read Access Token" shown beneath it, which is for a different auth scheme and fails
+with `Invalid API key`.
+
+Runtime knobs (`DIGEST_MONTH`, `ARCHIVE_DIR`, `DRY_RUN`, `TZ`, `RUN_DAY`, `RUN_HOUR`,
+`RUN_MINUTE`, `RUN_ON_START`, `STATE_FILE`) are documented in
+[deploy/README.md](deploy/README.md).
 
 ## Scheduling
 
-[deploy/](deploy/) ships a systemd service + timer (recommended — it catches up a run
-missed while the machine was down) and a crontab one-liner. There's also a
-`docker-compose.yml` for a single manual run.
+[compose.yaml](compose.yaml) runs the scheduler as a service — the simplest option, and
+what a stack manager expects. [deploy/](deploy/) additionally ships a systemd service +
+timer and a crontab line for driving `once` mode externally.
+
+The scheduler keeps a small state file recording the month it last sent. That gives it
+three properties worth knowing:
+
+- **No resend** after a container restart.
+- **Catch-up** — if the host was down on the 1st and returns on the 5th, that month still
+  goes out.
+- **No send on first boot** — it seeds state and waits for the next month, so deploying
+  never fires an unexpected email. `RUN_ON_START=1` overrides this for a test.
+
+It refuses to start if the state directory isn't writable, rather than running without
+those guarantees.
 
 ## Design notes
 

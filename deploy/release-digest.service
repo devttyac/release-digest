@@ -8,18 +8,22 @@ Requires=docker.service
 [Service]
 Type=oneshot
 
-# Adjust this path to wherever you cloned the repo.
-WorkingDirectory=/home/YOUR_USER/docker/release-digest
+# Adjust these paths to your install location.
+WorkingDirectory=/srv/release-digest
 
 # --rm so each run leaves nothing behind. The .env is mounted at runtime rather
 # than baked into the image, so credentials never live in an image layer.
+#
+# The trailing `once` is required: the image's default command is the
+# long-running scheduler, which never exits. Without `once` this Type=oneshot
+# unit would hang until TimeoutStartSec and then be killed as a failure.
 ExecStart=/usr/bin/docker run --rm \
     --name release-digest-run \
-    --env-file /home/YOUR_USER/docker/release-digest/.env \
+    --env-file /srv/release-digest/.env \
     -e TZ=Etc/UTC \
     -e ARCHIVE_DIR=/archive \
-    -v /home/YOUR_USER/docker/release-digest/archive:/archive \
-    release-digest:latest
+    -v /srv/release-digest/archive:/archive \
+    ghcr.io/devttyac/release-digest:latest once
 
 # A stalled CDN shouldn't leave this hanging until next month's run.
 TimeoutStartSec=20min
