@@ -120,12 +120,20 @@ and are worth knowing before "simplifying" them:
 ## Layout
 
 ```
-fetch_releases.py   fetch + dedupe + date-clip + rank  -> JSON
-render_digest.py    JSON -> email-safe HTML
-send_digest.py      render, embed posters, send over SMTP
-entrypoint.sh       chains fetch -> send for the container
+fetch_releases.py   fetch -> clip to month -> dedupe -> rank        -> JSON
+render_digest.py    JSON -> email-safe HTML (inline styles, tables)
+send_digest.py      render, embed posters as cid: parts, send via SMTP
+scheduler.py        long-running mode: fires monthly, tracks what it sent
+entrypoint.sh       dispatches `scheduler` (default) or `once`
+compose.yaml        the scheduler as a service, for a stack manager
+Dockerfile          the image both modes run from
 deploy/             systemd units, cron line, deployment guide
 ```
+
+Each stage runs independently, which is what makes it debuggable: run
+`fetch_releases.py` alone to inspect the JSON, `render_digest.py` to get the HTML
+without sending, or `send_digest.py --dry-run` to build the entire message and
+report its size while sending nothing.
 
 ## License
 
