@@ -61,14 +61,26 @@ def trim_overview(text: str, limit: int = 220) -> str:
     return cut.rstrip(",;:") + "…"
 
 
+class BadMonth(ValueError):
+    """A malformed month argument, reported as a message rather than a traceback."""
+
+
 def target_month(arg: str | None) -> tuple[str, str]:
-    """Return (first_day, last_day) as YYYY-MM-DD for the target month."""
+    """Return (first_day, last_day) as YYYY-MM-DD for the target month.
+
+    The month can arrive from DIGEST_MONTH in a container environment, where a
+    typo would otherwise surface as a bare traceback in the logs.
+    """
     if arg:
-        year, month = (int(part) for part in arg.split("-", 1))
+        try:
+            year, month = (int(part) for part in arg.split("-", 1))
+            first_day = datetime.date(year, month, 1)
+        except ValueError as exc:
+            raise BadMonth(f"invalid month {arg!r} — expected YYYY-MM ({exc})") from exc
     else:
         today = datetime.date.today()
         year, month = today.year, today.month
-    first_day = datetime.date(year, month, 1)
+        first_day = datetime.date(year, month, 1)
     last_day = datetime.date(year, month, calendar.monthrange(year, month)[1])
     return first_day.isoformat(), last_day.isoformat()
 
@@ -340,7 +352,11 @@ def main() -> int:
         print(f"Missing/unset: {', '.join(missing)} — edit .env in {SCRIPT_DIR}", file=sys.stderr)
         return 2
 
-    first_day, last_day = target_month(args.month)
+    try:
+        first_day, last_day = target_month(args.month)
+    except BadMonth as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     errors = []
     movies, err = fetch_tmdb("movie", tmdb_key, first_day, last_day)
@@ -373,7 +389,9 @@ def main() -> int:
     enrich_tmdb_overviews(tv_final, tmdb_key)
 
     output = {
-        "month": (args.month or first_day[:7]),
+        # Always the canonical YYYY-MM. Taking args.month verbatim would let
+        # `2026-9` through, which then names the archive files inconsistently.
+        "month": first_day[:7],
         "first_day": first_day,
         "last_day": last_day,
         "games": games_final,

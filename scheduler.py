@@ -47,6 +47,12 @@ ENTRYPOINT = os.environ.get("ENTRYPOINT_PATH") or str(Path(__file__).resolve().p
 # suspended host, a clock jump or a DST shift can't overshoot the window.
 MAX_SLEEP = 3600
 
+# Hard ceiling on a single digest run. Every network call inside it already has
+# its own timeout, but those only bound individual requests — a wedged child
+# would otherwise block this loop forever, leaving a container that looks alive
+# and never sends again. A normal run takes well under a minute.
+DIGEST_TIMEOUT = 1800
+
 # Optional Uptime Kuma push monitor. Without it a failed run is only visible in
 # the container log, which nobody reads until they notice the email is missing.
 PUSH_URL = os.environ.get("UPTIME_KUMA_PUSH_URL", "").strip()
@@ -134,7 +140,13 @@ def send_digest() -> bool:
     global _last_send_failed, _last_failure_msg
     log("running digest")
     try:
-        result = subprocess.run([ENTRYPOINT, "once"], check=False)
+        result = subprocess.run([ENTRYPOINT, "once"], check=False, timeout=DIGEST_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        log(f"digest TIMED OUT after {DIGEST_TIMEOUT}s — killed; will retry at the next check")
+        _last_send_failed = True
+        _last_failure_msg = f"digest timed out after {DIGEST_TIMEOUT}s"
+        push("down", _last_failure_msg)
+        return False
     except OSError as exc:
         # A missing or non-executable entrypoint must not take the scheduler
         # down with it — the stack would stop instead of retrying next check.
