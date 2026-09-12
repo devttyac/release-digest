@@ -16,6 +16,41 @@ pullable, so no registry login is needed.
 
 ## Option A — scheduler service (Compose / Dockge)
 
+### Where everything lives
+
+`env_file: - .env` in the stack definition is a relative path, resolved against **the
+directory containing `compose.yaml`** — not your shell's working directory. So `.env` must
+sit beside the compose file. Where that is depends on how you run it.
+
+**Plain Docker Compose** — one directory holds everything:
+
+```
+/srv/release-digest/
+├── compose.yaml
+├── .env          chmod 600
+├── state/        chown 10001:10001
+└── archive/      chown 10001:10001
+```
+
+**Dockge** — the stack definition lives in Dockge's directory, not yours:
+
+```
+/opt/stacks/release-digest/     owned by Dockge
+├── compose.yaml                edit in the Dockge UI
+└── .env                        edit in the Dockge UI's .env pane
+/srv/release-digest/            yours
+├── state/
+└── archive/
+```
+
+Under Dockge, **never create or edit `/opt/stacks/.../.env` on disk.** Dockge rewrites it
+from its own stored copy whenever it saves the stack, silently discarding the change. Keep
+`state` and `archive` outside `/opt/stacks` too, so deleting the stack doesn't take your
+send history with it.
+
+For the systemd and cron routes in [Option B](#option-b--systemd-timer-one-shot) the path
+is spelled out explicitly with `--env-file`.
+
 ### 1. Create the state and archive directories
 
 The container runs as **uid 10001**, so bind-mounted directories must be writable by that
@@ -32,6 +67,9 @@ deliberate: the state file is what prevents a resend on every restart, so runnin
 it would be worse than not running at all.
 
 ### 2. Stack definition
+
+Plain Compose: save this as `/srv/release-digest/compose.yaml`. Dockge: create a stack named
+`release-digest` and paste it into the compose editor.
 
 ```yaml
 services:
@@ -55,11 +93,22 @@ services:
 
 `state` must persist. Lose it and the scheduler forgets what it already sent.
 
-### 3. Fill in `.env`
+### 3. Create `.env` beside the compose file
 
-Copy [.env.example](../.env.example). **Docker's `env_file` is not dotenv** — it does not
-strip quotes, so `KEY="value"` passes the quote marks through as part of the value. Write
-values bare:
+Plain Compose — fetch the template straight into place, lock it down, then fill it in:
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/devttyac/release-digest/main/.env.example \
+  -o /srv/release-digest/.env
+sudo chmod 600 /srv/release-digest/.env
+sudo nano /srv/release-digest/.env
+```
+
+Dockge — paste the values into the `.env` pane below the compose editor and save. Dockge
+writes the file to `/opt/stacks/release-digest/.env` itself.
+
+**Docker's `env_file` is not dotenv** — it does not strip quotes, so `KEY="value"` passes the
+quote marks through as part of the value. Write values bare:
 
 ```
 TMDB_API_KEY=0123456789abcdef0123456789abcdef
@@ -75,17 +124,24 @@ Token", which is a different auth scheme and fails with `Invalid API key`.
 
 ### 4. Start and verify
 
+Plain Compose — run it from the stack directory, since that's what `.env` resolves against:
+
 ```bash
-docker compose up -d && docker logs -f release-digest
+cd /srv/release-digest && docker compose up -d && docker logs -f release-digest
 ```
+
+Dockge — press **Start**, and watch the log in the stack view.
 
 A healthy first start logs `scheduler up …` and then seeds its state **without sending**.
 To prove the whole path immediately, set `RUN_ON_START: "1"`, recreate, and look for:
 
 ```
-Wrote /tmp/release-digest-data.json — games=10 movies=10 tv=10
-Sent to you@example.com — ~850000 bytes
+Wrote /tmp/release-digest-data.json — games=10 movies=10 tv=10 anime=6
+Sent to 1 recipient(s): you@example.com — ~850000 bytes
 ```
+
+Section counts vary by month — anime in particular swings with the quarterly broadcast
+season, and a section with nothing in it is simply left out of the email.
 
 Then remove `RUN_ON_START` and recreate again, or it sends on every start.
 
@@ -113,9 +169,10 @@ docker exec release-digest python -c "import os;k=os.environ.get('TMDB_API_KEY',
 malformed value — a key short by even one character surfaces as
 `Invalid API key: You must be granted a valid key`.
 
-Also worth knowing: a stack manager's directory is often **not** where your volumes point.
-Dockge keeps stacks in `/opt/stacks/<name>/`, and that is the `.env` it reads — editing a
-copy elsewhere has no effect. To find the directory a running stack was created from:
+Under Dockge, make the edit in its `.env` pane and press **Update**. Editing
+`/opt/stacks/<name>/.env` on disk appears to work until Dockge next saves the stack, then
+silently reverts; editing a copy anywhere else has no effect at all. If you're unsure which
+directory a running stack was created from:
 
 ```bash
 docker inspect release-digest --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'
